@@ -3,223 +3,192 @@
 <head>
 <script src="js/m4th.min.js"></script>
 <script>
-var xPos = 0;
-var yPos = 0;
-var i = 0;
+
+// Simulation inputs.
+var epsilon = 1e-10; //Desired max error.
+var step = .1;
+var lengths = [70,60,50,40]; //Lengths of links.
+var dim = lengths.length;
+
+// Simulation state.
 var angCurrent = [0,0,1,0];
+
+// IO inputs.
+var updateInterval = 25;
+
+// IO state.
+var clickX = 0;
+var clickY = 0;
 var ctx;
-var init = function()
+var updateCallID = null; //ID of current scheduled update.
+
+// Convenience.
+var M = m4th.matrix;
+var TAU = 2 * Math.PI;
+
+function init()
 {
-	document.getElementById("canvas").addEventListener("click",getClickPosition);
-	ctx = document.getElementById("canvas").getContext('2d');
-		setInterval(update,25)
+	var canvas = document.getElementById("canvas");
+	canvas.addEventListener("click", setClickPosition);
+	ctx = canvas.getContext('2d');
 
 	ctx.scale(1,-1);
 	ctx.translate(400,-400);
-
-
+	redraw(ctx); //Don't have a blank screen.
+	scheduleUpdate();
 }
 
-function getClickPosition(e) {
-    var parentPosition = getPosition(e.currentTarget);
-    xPos = e.clientX - parentPosition.x - 400;
-    yPos = -1* (e.clientY - parentPosition.y - 400);
-
+function setClickPosition(e) {
+	var parentPosition = getPosition(e.currentTarget);
+	clickX = e.clientX - parentPosition.x - 400;
+	clickY = -(e.clientY - parentPosition.y - 400);
+	scheduleUpdate();
 }
  
 function getPosition(element) {
-    var xPosition = 0;
-    var yPosition = 0;
-      
-    while (element) {
-        xPosition += (element.offsetLeft - element.scrollLeft + element.clientLeft);
-        yPosition += (element.offsetTop - element.scrollTop + element.clientTop);
-        element = element.offsetParent;
-    }
-    return { x: xPosition, y: yPosition };
+	var xPosition = 0;
+	var yPosition = 0;
+	
+	while (element) {
+		xPosition += (element.offsetLeft - element.scrollLeft + element.clientLeft);
+		yPosition += (element.offsetTop - element.scrollTop + element.clientTop);
+		element = element.offsetParent;
+	}
+	return { x: xPosition, y: yPosition };
 }
 
-//meat of the file, where all of the math is done
-var update = function()
+//Schedules/unschedules updates.
+function scheduleUpdate()
 {
-	var M = m4th.matrix;
-
-	//target position
-	Pgoal = M(2,[
-		xPos, //x
-		yPos,  //y
-	]);
-
-	//describes DoF variables at current state
-	l = [70,70,70,0]; //length of joint
+	var Pgoal = getClickTarget();
 	
-	Q = M(4,[
-		angCurrent[0],
-		angCurrent[1],
-		angCurrent[2],
-		angCurrent[3]
-	]);
-
-	//forward kinematic equations, generalized for i amount of 2d revolute joints with orthogonal axis of rotation
-	Px = 0;
-	Py = 0;
-	for(var i = 0; i < Q.rows; i++)
-	{
-		angSum = 0;
-		for(var j = 0; j < i+1; j++)
-			angSum += Q.get(j,0);
-		Px += l[i]*Math.cos(angSum);
-		Py += l[i]*Math.sin(angSum);
+	// "Are we close enough?"
+	var P = M(2, getCurrentEndPoint());
+	var err = vectorNorm(Pgoal.minus(P));
+	var done = err < epsilon;
+	
+	// Make sure only one update is scheduled at a time.
+	if (done && updateCallID !== null) {
+		//We're done, but update is scheduled.
+		clearInterval(updateCallID);
+		updateCallID = null;
+	} else if (!done && updateCallID === null) {
+		//We're not done, but update isn't scheduled.
+		updateCallID = setInterval(update, updateInterval);
+	} else {
+		//Everything is as it should be.
 	}
+}
+
+function update()
+{
+	//Find target position.
+	var Pgoal = getClickTarget();
 	
-	P = M(2,[Px,Py]);
+	//Update angles a little.
+	updateAngles(Pgoal, step);
 	
-	//clears the canvas
+	//Redraw.
+	redraw(ctx);
+	
+	//Reschedule as needed.
+	scheduleUpdate();
+}
+
+
+/*** Drawing functions. ***/
+
+function redraw(ctx)
+{
+	//Clear the canvas.
 	canvasClear(ctx);
 	
-	//draws the origin
-	ctx.strokeStyle = "red";
-	ctx.fillStyle = "black";
-	ctx.beginPath();
-	ctx.arc(0,0,200,2*Math.PI,false);
-	ctx.fill();
-	
-	//draws the the circle that bounds the arm
-	ctx.fillStyle = "red";
-	ctx.beginPath();
-	ctx.arc(0,0,l[0]+l[1]+l[2]+l[3],2*Math.PI,false);
-	ctx.stroke();
-	
-	dX = Pgoal.minus(P);
-	
-	//J is Jacobian/partial derivatives of P ie dPx/dq1, dPx/dq2 etc
-	//Maps variables describing DoF of each joint to the end-effector state
-	//dij is a partial derivative of P(ang) ie an element of J
-	//too verbose for my taste; if I have time, I'll make the jacobian generation procedural like the forward kinematics
-	d1x = -l[0]*Math.sin(Q.get(0,0)) - l[1]*Math.sin(Q.get(0,0)+Q.get(1,0)) - l[1]*Math.sin(Q.get(0,0)+Q.get(1,0)+Q.get(2,0))-l[3]*Math.sin(Q.get(0,0)+Q.get(1,0)+Q.get(2,0)+Q.get(3,0));
-	d1y = l[0]*Math.cos(Q.get(0,0)) + l[1]*Math.cos(Q.get(0,0)+Q.get(1,0)) + l[1]*Math.cos(Q.get(0,0)+Q.get(1,0)+Q.get(2,0))+l[3]*Math.cos(Q.get(0,0)+Q.get(1,0)+Q.get(2,0)+Q.get(3,0));
-
-	d2x = - l[1]*Math.sin(Q.get(0,0)+Q.get(1,0)) - l[1]*Math.sin(Q.get(0,0)+Q.get(1,0)+Q.get(2,0))-l[3]*Math.sin(Q.get(0,0)+Q.get(1,0)+Q.get(2,0)+Q.get(3,0));
-	d2y = l[1]*Math.cos(Q.get(0,0)+Q.get(1,0)) + l[1]*Math.cos(Q.get(0,0)+Q.get(1,0)+Q.get(2,0))+l[3]*Math.cos(Q.get(0,0)+Q.get(1,0)+Q.get(2,0)+Q.get(3,0));
-	
-	d3x =  - l[1]*Math.sin(Q.get(0,0)+Q.get(1,0)+Q.get(2,0))-l[3]*Math.sin(Q.get(0,0)+Q.get(1,0)+Q.get(2,0)+Q.get(3,0));
-	d3y = l[1]*Math.cos(Q.get(0,0)+Q.get(1,0)+Q.get(2,0))+l[3]*Math.cos(Q.get(0,0)+Q.get(1,0)+Q.get(2,0)+Q.get(3,0));
-
-	d4x = -l[3]*Math.sin(Q.get(0,0)+Q.get(1,0)+Q.get(2,0)+Q.get(3,0))
-	d4y = l[3]*Math.cos(Q.get(0,0)+Q.get(1,0)+Q.get(2,0)+Q.get(3,0))
-
-	J = M(2,[
-		d1x, d2x, d3x,d4x,
-		d1y, d2y, d3y, d4y
-	])
-
-	//LU factorization and lin least squares inversion  jT(jjT)*     (jTj)*jT
-	if(J.columns > J.rows)
-		jInv = J.transp().mult(m4th.lu(J.mult(J.transp())).getInverse());
-	else if(J.columns < J.rows)
-		jInv = m4th.lu(J.transp().mult(J)).getInverse().mult(J.transp());
-	else
-		jInv = m4th.lu(J).getInverse();
-		
-	dX = Pgoal.minus(P);
-	dQ = jInv.mult(dX);
-	
-	//update Q one step 
-	Q = Q.add(dQ.times(.1));
-
-	Px = 0;
-	Py = 0;
-	
-	//updates Q for drawing
-	for(var i = 0; i < Q.rows; i++)
-	{
-		angSum = 0;
-		for(var j = 0; j < i+1; j++)
-			angSum += Q.get(j,0);
-		Px += l[i]*Math.cos(angSum);
-		Py += l[i]*Math.sin(angSum);
-	}
-	
-	//resets P
-	P = M(2,[
-		Px,
-		Py
-	]);
-	
-	
-	//updates the array Q is set from
-	for(var i = 0; i < Q.rows; i++)
-	{
-		angCurrent[i] = Q.get(i,0);
-	}
-	
-	//really verbose way of drawing the links
-	ctx.beginPath();
-	ctx.arc(Pgoal.get(0,0),Pgoal.get(1,0),5,2*Math.PI,false);
-	ctx.fill();
-	
-	ctx.strokeStyle = "blue";
-	drawLine(ctx,0,0,l[0]*Math.cos(Q.get(0,0)),l[0]*Math.sin(Q.get(0,0)));
-	
-	ctx.save();
-	
-	ctx.translate(l[0]*Math.cos(Q.get(0,0)),l[0]*Math.sin(Q.get(0,0)));
-	ctx.rotate(Q.get(0,0));
-	
-	drawLine(ctx,0,0,l[1]*Math.cos(Q.get(1,0)),l[1]*Math.sin(Q.get(1,0)));
-	ctx.translate(l[1]*Math.cos(Q.get(1,0)),l[1]*Math.sin(Q.get(1,0)));
-	ctx.rotate(Q.get(1,0));
-	
-	drawLine(ctx,0,0,l[2]*Math.cos(Q.get(2,0)),l[2]*Math.sin(Q.get(2,0)));
-	ctx.translate(l[2]*Math.cos(Q.get(2,0)),l[2]*Math.sin(Q.get(2,0)));
-	ctx.rotate(Q.get(2,0));
-	
-	drawLine(ctx,0,0,l[3]*Math.cos(Q.get(3,0)),l[3]*Math.sin(Q.get(3,0)));
-
-
-	ctx.restore();
-
+	//Redraw the canvas.
+	drawBackground(ctx);
+	drawClickTarget(ctx);
+	drawLinks(ctx);
 }
 
-//not used
-var cross = function(p1,p2)
-{ 	
-	return {x: p1.y*p2.z-p1.z*p2.y, y: p1.z * p2.x - p1.x*p2.z, z:p1.x*p2.y-p1.y*p2.x}
-}
-
-var canvasClear = function(ctx){
+function canvasClear(ctx){
 	ctx.save();
 	ctx.setTransform(1, 0, 0, 1, 0, 0);
 	ctx.clearRect(0, 0, canvas.width, canvas.height);
 	ctx.restore();
 }
 
-//not used
-var rotate = function(ctx, originx,originy,endx,endy,ang)
+function drawBackground(ctx)
 {
-	xf = (endx-originx)*Math.cos(ang) - (endy-originy)*Math.sin(ang) + originx;
-	yf = (endx-originx)*Math.cos(ang) + (endy-originy)*Math.sin(ang) + originy;
+	//draws the origin
+	ctx.strokeStyle = "red";
+	ctx.fillStyle = "black";
+	ctx.beginPath();
+	ctx.arc(0,0,200,TAU,false);
+	ctx.fill();
+	
+	//draws the circle that bounds the arm
+	ctx.fillStyle = "red";
+	ctx.beginPath();
+	ctx.arc(0,0,sum(lengths),TAU,false);
+	ctx.stroke();
+}
+
+// Draw a dot at mouse click position.
+function drawClickTarget(ctx)
+{
+	ctx.beginPath();
+	ctx.arc(clickX, clickY, 5, TAU, false);
+	ctx.fill();
+}
+
+// Draw the arms.
+function drawLinks(ctx)
+{
+	ctx.save();
+	ctx.strokeStyle = "blue";
+	ctx.lineWidth = 4;
+	var points = getCurrentPoints();
+	
+	var p;
+	var old = [0,0];
+	for (var i = 0; i < dim; i++){
+		p = points[i].array;
+		drawLineBetweenPointArrays(ctx, old, p);
+		old = p;
+	}
+	ctx.restore();
+}
+
+//not used
+function rotate(ctx, originx,originy,endx,endy,ang)
+{
+	var dx = (endx - originx) * Math.cos(ang);
+	var dy = (endy - originy) * Math.sin(ang);
+	var xf = originx + dx - dy;
+	var yf = originy + dx + dy;
 	drawLine(ctx,originx,originy,xf,yf);
 }
 
 //not used
-var drawLinePolar = function(ctx, p)
+function drawLinePolar(ctx, p)
 {
-	endx = p.mag*Math.cos(p.ang)+p.ox;
-	endy = p.mag*Math.sin(p.ang)+p.oy;
+	var endx = p.mag*Math.cos(p.ang) + p.ox;
+	var endy = p.mag*Math.sin(p.ang) + p.oy;
 	drawLine(ctx,p.ox,p.oy,endx,endy);
 	return [endx,endy]
 }
 
+function drawLineBetweenPointArrays(ctx, p, q) {
+	drawLine(ctx, p[0], p[1], q[0], q[1]);
+}
 
-var drawLine = function(ctx, startx,starty,endx,endy)
+function drawLine(ctx, startx,starty,endx,endy)
 {
 	ctx.beginPath();
 	ctx.moveTo(startx,starty);
 	ctx.lineTo(endx,endy);
 	ctx.stroke();
 }
-/*var drawLine = function(ctx, p1, p2)
+/*function drawLine(ctx, p1, p2)
 {
 	ctx.beginPath();
 	ctx.moveTo(p1.x,p1.y);
@@ -227,6 +196,169 @@ var drawLine = function(ctx, startx,starty,endx,endy)
 	ctx.stroke();
 }*/
 
+
+/*** Functions based on current state. ***/
+
+function getClickTarget() {
+	var Pgoal = M(2,[
+		clickX,
+		clickY,
+	]);
+	
+	//If it's too far, try to get as close as possible.
+	//Otherwise, clicking outside the circle causes the bones to spaz out.
+	var totalLength = sum(lengths);
+	var goalDistance = vectorNorm(Pgoal);
+	if (totalLength < goalDistance) {
+		Pgoal = Pgoal.times(totalLength / goalDistance);
+	}
+	return Pgoal;
+}
+
+//Meat of the file, where all of the math is done.
+function updateAngles(Pgoal, step)
+{
+	//Invert the kinematics matrix.
+	var J = getCurrentJacobian();
+	var jInv = partialMatrixInverse(J);
+	
+	//Find change in position.
+	var P = getCurrentEndPoint();
+	var dP = Pgoal.minus(P);
+	
+	//Update angles one step.
+	var Q = M(dim, angCurrent);
+	var dQ = jInv.mult(dP);
+	Q = Q.add(dQ.times(step));
+	angCurrent = Q.array;
+}
+
+function getCurrentJacobian()
+{
+	//J is Jacobian/partial derivatives of P ie dPx/dq1, dPx/dq2 etc
+	//Maps variables describing DoF of each joint to the end-effector state
+	//dij is a partial derivative of P(ang) ie an element of J
+	
+	var dxs = new Array(dim);
+	var dys = new Array(dim);
+	var dx = 0, dy = 0;
+	var l, a, angSums = partialSums(angCurrent);
+	for (var i = dim; i-- > 0;) {
+		l = lengths[i];
+		a = angSums[i];
+		dx -= l * Math.sin(a);
+		dy += l * Math.cos(a);
+		dxs[i] = dx;
+		dys[i] = dy;
+	}
+	
+	var J = M(2, dxs.concat(dys));
+	return J;
+}
+
+// Find current endpoint of the links.
+function getCurrentEndPoint()
+{
+	return getCurrentPoints()[dim-1];
+}
+// function getCurrentEndPoint()
+// {
+	// //forward kinematic equations, generalized for i amount of 2d revolute joints with orthogonal axis of rotation
+	// var Px = 0;
+	// var Py = 0;
+	// var angSums = partialSums(angCurrent);
+	// for(var i = 0; i < dim; i++)
+	// {
+		// var l = lengths[i];
+		// var a = angSums[i];
+		// Px += l * Math.cos(a);
+		// Py += l * Math.sin(a);
+	// }
+	
+	// P = M(2,[Px,Py]);
+	// return P;
+// }
+
+//Find all the current joint locations.
+function getCurrentPoints() {
+	//forward kinematic equations, generalized for i amount of 2d revolute joints with orthogonal axis of rotation
+	var Ps = [];
+	var x = 0;
+	var y = 0;
+	var angSums = partialSums(angCurrent);
+	for(var i = 0; i < dim; i++)
+	{
+		var l = lengths[i];
+		var a = angSums[i];
+		x += l * Math.cos(a);
+		y += l * Math.sin(a);
+		Ps.push(M(2,[x,y]));
+	}
+	return Ps;
+}
+
+
+/*** Linear algebra functions. ***/
+
+//not used
+function cross(p1,p2)
+{	 
+	return {
+		x: p1.y*p2.z - p1.z*p2.y,
+		y: p1.z*p2.x - p1.x*p2.z,
+		z: p1.x*p2.y - p1.y*p2.x,
+	};
+}
+
+
+function partialMatrixInverse(j)
+{
+	// LU factorization and linear least squares inversion.
+	//  jT(jjT)*  or  (jTj)*jT
+	if (j.columns == j.rows) {
+		return m4th.lu(j).getInverse();
+	}
+	var jT = j.transp();
+	if (j.columns > j.rows) {
+		return jT.mult(LUInverse(j.mult(jT)));
+	} else {
+		return LUInverse(jT.mult(j)).mult(jT);
+	}
+}
+
+function LUInverse(A)
+{
+	return m4th.lu(A).getInverse();
+}
+
+function vectorNorm(v){
+	return Math.sqrt(v.transp().mult(v).get(0,0));
+}
+
+
+/*** Just functions. ***/
+
+function sum(arr)
+{
+	var length = arr.length;
+	var sum = 0;
+	for (var i = 0; i < length; i++) {
+		sum += arr[i];
+	}
+	return sum;
+}
+
+function partialSums(arr)
+{
+	var length = arr.length;
+	var psums = [];
+	var sum = 0;
+	for (var i = 0; i < length; i++) {
+		sum += arr[i];
+		psums.push(sum);
+	}
+	return psums;
+}
 
 </script>
 <style>
